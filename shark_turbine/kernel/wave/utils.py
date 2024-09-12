@@ -16,8 +16,8 @@ from typing import Callable, Any, List, Tuple
 from .._support.tracing import CapturedTrace
 from .._support.indexing import IndexExpr, IndexingContext, IndexSymbol, IndexSequence
 from ..lang.global_symbols import *
-from ..ops.wave_ops import get_custom, Output, Write, MMA
-from .constraints import Constraint, HardwareConstraint, TilingConstraint
+from ..ops.wave_ops import get_custom, Output, Write, Reduction, MMA, CustomOp
+from .constraints import HardwareConstraint, TilingConstraint, Constraint
 import torch.fx as fx
 import shark_turbine.kernel.lang as tkl
 
@@ -88,6 +88,21 @@ def print_trace(trace: CapturedTrace, custom_print: bool = True):
         if custom_print:
             for node in subgraph.nodes:
                 print(get_custom(node))
+
+
+def print_subgraph(trace: CapturedTrace, subgraph_name: str, custom_print: bool = True):
+    """
+    Prints a specific subgraphs of a trace.
+    The graphs are printed first in the torch printing format and
+    then using our custom node format.
+    """
+    # The root graph is at the back so we print the subgraphs in reverse order
+    for name, subgraph in trace.region_graph.subgraphs.items():
+        if name == subgraph_name:
+            print(subgraph)
+            if custom_print:
+                for node in subgraph.nodes:
+                    print(get_custom(node))
 
 
 def DCE(trace: CapturedTrace):
@@ -378,3 +393,42 @@ def erase_graph(graph: fx.Graph):
         for user in node.users:
             graph.erase_node(user)
         graph.erase_node(node)
+
+
+def get_induction_variable(
+    reduction: Reduction, constraints: list[Constraint]
+) -> IndexSymbol:
+    induction_var = None
+    for constraint in constraints:
+        if (
+            isinstance(constraint, TilingConstraint)
+            and reduction.axis == constraint.dim
+        ):
+            induction_var = constraint.induction_var
+            break
+    else:
+        raise ValueError(f"Could not find induction variable for reduction {reduction}")
+    return induction_var
+
+
+def get_tiling_constraint(
+    reduction: Reduction, constraints: list[Constraint]
+) -> TilingConstraint:
+    for constraint in constraints:
+        if (
+            isinstance(constraint, TilingConstraint)
+            and reduction.axis == constraint.dim
+        ):
+            return constraint
+    else:
+        raise ValueError(f"Could not find tiling constraint for reduction {reduction}")
+
+
+def replace_uses_in(users: dict[fx.Node, list[CustomOp]], old: CustomOp, new: fx.Node):
+    """
+    Replace all uses of `old` with `new` in the list of users.
+    """
+    for user in users[old]:
+        for i, arg in enumerate(user.fx_node.args):
+            if arg == old.fx_node:
+                user.update_arg(i, new)
