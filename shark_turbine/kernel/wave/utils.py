@@ -432,3 +432,27 @@ def replace_uses_in(users: dict[fx.Node, list[CustomOp]], old: CustomOp, new: fx
         for i, arg in enumerate(user.fx_node.args):
             if arg == old.fx_node:
                 user.update_arg(i, new)
+
+
+def get_scheduling_mask(operation: Operation) -> int:
+    """
+    Returns the scheduling mask for the given operation.
+    """
+    match operation:
+        case Operation.READ_GLOBAL:
+            return int("0x20", 0)
+        case Operation.WRITE_GLOBAL:
+            return int("0x40", 0)
+        case Operation.READ_SHARED:
+            return int("0x100", 0)
+        case Operation.WRITE_SHARED:
+            return int("0x200", 0)
+        case Operation.MMA:
+            return int("0x8", 0)
+        case Operation.ALU:
+            return int("0x1", 0)
+        case Operation.VALU:
+            return int("0x2", 0)
+        case Operation.SALU:
+            return int("0x4", 0)
+    return None

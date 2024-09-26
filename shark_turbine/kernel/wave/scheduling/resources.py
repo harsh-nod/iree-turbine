@@ -24,6 +24,9 @@ class Operation(Enum):
     READ_GLOBAL = "read_global"
     WRITE_GLOBAL = "write_global"
     MMA = "mma"
+    ALU = "alu"
+    VALU = "valu"
+    SALU = "salu"
     NOOP = "noop"
 
 
