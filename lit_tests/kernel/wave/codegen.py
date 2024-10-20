@@ -7,6 +7,7 @@ import iree.turbine.kernel.lang as tkl
 import iree.turbine.kernel.wave as tkw
 from iree.turbine.kernel.lang.global_symbols import *
 from iree.turbine.kernel.wave.utils import run_test
+from iree.turbine.kernel.wave.constraints import MMAType
 import torch
 
 M = tkl.sym.M
@@ -1766,6 +1767,87 @@ def test_broadcast_add():
         # CHECK: %[[EXTRACT_1:.+]] = vector.extract %[[RHS_1]][0] : f16 from vector<1xf16>
         # CHECK: %[[BCAST_RHS_1:.+]] = vector.splat %[[EXTRACT_1]] : vector<2xf16>
         # CHECK: arith.addf %[[LHS_1]], %[[BCAST_RHS_1]] : vector<2xf16>
+
+
+@run_test
+def test_nested_reductions():
+    K1 = tkl.sym.K1
+    K2 = tkl.sym.K2
+    BLOCK_K1 = tkl.sym.BLOCK_K1
+    BLOCK_K2 = tkl.sym.BLOCK_K2
+
+    constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
+    constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
+    constraints += [tkw.WorkgroupConstraint(B, BLOCK_B, 2)]
+    constraints += [tkw.TilingConstraint(K2, BLOCK_K2)]
+    constraints += [tkw.TilingConstraint(K1, BLOCK_K1)]
+    constraints += [tkw.WaveConstraint(M, BLOCK_M / 2, 0)]
+    constraints += [tkw.WaveConstraint(N, BLOCK_N / 2, 1)]
+
+    constraints += [
+        tkw.HardwareConstraint(
+            threads_per_wave=64,
+            waves_per_block=(2, 2, 1),
+            mma_type=MMAType.F32_16x16x16_F16,
+            vector_shapes={B: 0},
+        )
+    ]
+
+    @tkw.wave(constraints)
+    def nested_gemm(
+        q: tkl.Memory[B, M, K1, ADDRESS_SPACE, tkl.f16],
+        k: tkl.Memory[B, K2, K1, ADDRESS_SPACE, tkl.f16],
+        v: tkl.Memory[B, N, K2, ADDRESS_SPACE, tkl.f16],
+        c: tkl.Memory[B, M, N, GLOBAL_ADDRESS_SPACE, tkl.f32],
+    ):
+        c_reg = tkl.Register[B, M, N, tkl.f32](0.0)
+
+        # In the outer reduction, K2 is the reduction dimension.
+        @tkw.reduction(K2, init_args=[c_reg])
+        def repeat(
+            acc: tkl.Register[B, M, N, tkl.f32]
+        ) -> tkl.Register[B, M, N, tkl.f32]:
+            imm_reg = tkl.Register[B, K2, M, tkl.f32](0.0)
+
+            @tkw.reduction(K1, init_args=[imm_reg])
+            def inner_loop(
+                inner_acc: tkl.Register[B, K2, M, tkl.f32]
+            ) -> tkl.Register[B, K2, M, tkl.f32]:
+                q_reg = tkw.read(q, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+                k_reg = tkw.read(k, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+                inner_acc = tkw.mma(k_reg, q_reg, inner_acc)
+                return inner_acc
+
+            imm_t = tkw.permute(inner_loop, target_shape=[B, M, K2])
+            imm_f16 = tkw.cast(imm_t, tkl.f16)
+            v_reg = tkw.read(v, elements_per_thread=LOAD_ELEMS_PER_THREAD)
+            acc = tkw.mma(imm_f16, v_reg, acc)
+            return acc
+
+        tkw.write(repeat, c, elements_per_thread=STORE_ELEMS_PER_THREAD)
+
+    shape = [8, 128, 64, 256, 128]
+    hyperparams = {
+        ADDRESS_SPACE: SHARED_ADDRESS_SPACE,
+        LOAD_ELEMS_PER_THREAD: 4,
+        STORE_ELEMS_PER_THREAD: 4,
+        BLOCK_M: 64,
+        BLOCK_N: 64,
+        BLOCK_K1: 32,
+        BLOCK_K2: 32,
+        BLOCK_B: 1,
+        B: shape[0],
+        M: shape[1],
+        N: shape[2],
+        K1: shape[3],
+        K2: shape[4],
+    }
+
+    q = torch.randn(shape[0], shape[1], shape[3], dtype=torch.float16)
+    k = torch.randn(shape[0], shape[4], shape[3], dtype=torch.float16)
+    v = torch.randn(shape[0], shape[4], shape[2], dtype=torch.float16)
+    with tk.gen.TestLaunchContext(hyperparams, canonicalize=True):
+        print(nested_gemm(q, k, v.T).module_op)
 
 
 @run_test

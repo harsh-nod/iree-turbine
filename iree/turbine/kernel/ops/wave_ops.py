@@ -134,6 +134,14 @@ def cast(src: "Register", dtype: DataType) -> "Register":
     ...
 
 
+def permute(src: "Register", target_shape: Sequence[IndexExpr]) -> "Register":
+    ...
+
+
+def name_cast(src: "Register", dim: IndexExpr) -> "Register":
+    ...
+
+
 def define_op(op_name: str) -> Callable[[T], T]:
     def decorator(cls: T) -> T:
         cls.tkw_op_name = op_name
@@ -961,12 +969,26 @@ class Reduction(CustomOp):
 
         return wrapper
 
+    def get_root_graph(self):
+        """
+        Get root graph from some child graph inside a nested graph.
+        Using the assumption that any child/nested graph should have a parent_op,
+        who we can query for it's owner graph from to go up one level.
+        """
+        cur_graph = self.graph
+        while not hasattr(cur_graph, "subgraphs"):
+            if not hasattr(cur_graph, "parent_op"):
+                raise ValueError("All subgraphs should have parent_op")
+            cur_graph = cur_graph.parent_op.graph
+        return cur_graph
+
     @property
     def indexing_dims(self) -> list[IndexSymbol] | list[list[IndexSymbol]]:
         expand_dims: list[IndexSymbol] = []
+        root_graph = self.get_root_graph()
         return_node = [
             nested_node
-            for nested_node in self.graph.subgraphs[self.subgraph_name].nodes
+            for nested_node in root_graph.subgraphs[self.subgraph_name].nodes
             if isinstance(get_custom(nested_node), Output)
         ]
         assert len(return_node) == 1
@@ -1291,3 +1313,59 @@ class CastOp(CustomOp, ABC):
     def type(self) -> Memory:
         src_shape = get_custom(self.arg).type.symbolic_shape
         return Register[*src_shape, self.dtype]
+
+
+@define_op("permute")
+@dataclass
+class Permute(CustomOp, ABC):
+    """
+    Represents a permute operation that
+    permutes arg into the target shape.
+    """
+
+    arg: fx.Node
+    target_shape: Sequence[IndexExpr]
+
+    @property
+    def indexing_dims(self) -> list[IndexExpr]:
+        return self.target_shape
+
+    @property
+    def type(self) -> Memory:
+        src_type = get_custom(self.arg).type
+        return Register[*self.target_shape, src_type.dtype]
+
+
+@define_op("rename")
+@dataclass
+class Rename(CustomOp, ABC):
+    """
+    Represents a renaming operation that
+    renames one of the symbolic dimensions of the node.
+    """
+
+    arg: fx.Node
+    dim_map: dict[IndexExpr, IndexExpr]
+
+    @property
+    def indexing_dims(self) -> list[IndexExpr]:
+        src_type = get_custom(self.arg).type
+        new_type = [
+            dim if dim not in self.dim_map else self.dim_map[dim]
+            for dim in src_type.symbolic_shape
+        ]
+        return new_type
+
+    @property
+    def src_indexing_dims(self) -> list[IndexExpr]:
+        src_type = get_custom(self.arg).type
+        return src_type.symbolic_shape
+
+    @property
+    def type(self) -> Register:
+        src_type = get_custom(self.arg).type
+        new_type = [
+            dim if dim not in self.dim_map else self.dim_map[dim]
+            for dim in src_type.symbolic_shape
+        ]
+        return Register[*new_type, src_type.dtype]

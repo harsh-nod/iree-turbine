@@ -46,6 +46,7 @@ from .shared_memory_indexing import (
     apply_shared_memory_indexing_corrections,
     align_index_sizes,
 )
+from .symbolic_analysis import partition_symbols, combine_symbols
 from .thread_shape_analysis import determine_thread_shapes
 from .scheduling.schedule import schedule_graph
 from .._support.indexing import IndexingContext, IndexExpr
@@ -228,6 +229,9 @@ class LaunchableWave(Launchable):
         promote_placeholders(graph, self.constraints)
         hoist_allocs(graph)
 
+        # Introduce renames.
+        cloned_symbols = partition_symbols(graph, self.constraints)
+
         # Set indices.
         set_node_indices(graph, self.constraints)
 
@@ -236,6 +240,9 @@ class LaunchableWave(Launchable):
 
         # Set post expansion indices.
         set_post_expansion_indices(graph, self.constraints)
+
+        # Remove renames.
+        combine_symbols(cloned_symbols, graph, self.constraints)
 
         # Clean up chains of GetResults
         remove_chained_getresult(graph)

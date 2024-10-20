@@ -232,35 +232,6 @@ def get_mma_dimensional_mapping(
     return mapping, capture_mma_slices([get_custom(x) for x in mma_nodes])
 
 
-def get_hardware_vector_size(
-    dim: IndexSymbol,
-    hardware_constraint: HardwareConstraint,
-    mma_indices: dict[IndexSymbol, int],
-) -> int:
-    """
-    Given a hardware constraint, return the vector sizes for the given dimension.
-    This could be a hardware specific vector size or a user specified vector size.
-    """
-    if mma_indices:
-        vector_size = hardware_constraint.mma_matrix_shapes[mma_indices[dim]]
-    else:
-        vector_size = hardware_constraint.vector_shapes[dim]
-    return vector_size
-
-
-def get_hardware_vector_map(constraints: list[Constraint]) -> dict[IndexSymbol, int]:
-    """
-    Given a list of constraints, looks for hardware constraint and return a map
-    containing dim's and their respective vector sizes.
-    """
-    vector_map = {}
-    for c in constraints:
-        if isinstance(c, HardwareConstraint):
-            vector_map = c.vector_shapes
-            break
-    return vector_map
-
-
 def remove_global_indexing(
     index: dict[IndexSymbol, IndexSequence], constraints: list[Constraint]
 ) -> dict[IndexSymbol, IndexSequence]:
@@ -545,7 +516,9 @@ def get_inputs(
         reduction = get_custom(custom.value)
         assert isinstance(reduction, Reduction), "GetResult must be used by a Reduction"
         # Map get result to output
-        reduction_subgraph = reduction.graph.subgraphs[reduction.subgraph_name]
+        reduction_subgraph = reduction.get_root_graph().subgraphs[
+            reduction.subgraph_name
+        ]
         inputs.append(reduction.outputs(reduction_subgraph)[custom.res_idx])
     else:
         # Default handling for other ops.

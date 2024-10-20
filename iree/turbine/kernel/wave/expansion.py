@@ -91,7 +91,8 @@ def get_indexed_dims(
         flattened_dims = list(itertools.chain.from_iterable(nodeOrDims))
         flatten_dims_set = dict.fromkeys(flattened_dims)
         nodeOrDims = list(flatten_dims_set)
-    return tuple((key, all_dims[key]) for key in nodeOrDims if key in all_dims)
+    dims = tuple((key, all_dims[key]) for key in nodeOrDims if key in all_dims)
+    return tuple(sorted(dims, key=lambda x: str(x[0])))
 
 
 def get_last(node_list: fx.graph._node_list) -> fx.Node:  # type: ignore
@@ -230,11 +231,18 @@ def _expand_node(
 
     # Proceed with expansion of the arguments
     for i, arg in node.node_args.items():
+        arg_restricted_dims = restricted_dims
+        if isinstance(node, Rename):
+            for dim, val in arg_restricted_dims.items():
+                if dim in node.dim_map:
+                    arg_restricted_dims[dim] = arg_restricted_dims[node.dim_map[dim]]
+                    arg_restricted_dims[node.dim_map[dim]] = val
+
         if is_expandable(arg):
             new_arg = _expand_node(
                 arg,
                 trace,
-                restricted_dims,
+                arg_restricted_dims,
                 dim_scaling,
                 context,
                 res_idx,
@@ -258,7 +266,10 @@ def _expand_reduction(
     users = reduction.users
     expand_dims: list[IndexSymbol] = []
     for user in users:
-        for indexing_dim in user.indexing_dims:
+        indexing_dims = user.indexing_dims
+        if isinstance(user, Rename):
+            indexing_dims = user.src_indexing_dims
+        for indexing_dim in indexing_dims:
             if indexing_dim not in expand_dims:
                 expand_dims.append(indexing_dim)
     logger.debug(f"expanding reduction in dims: {expand_dims}")

@@ -111,7 +111,7 @@ def set_node_indices(trace: CapturedTrace, constraints: list[Constraint]):
 
 def compute_stride(
     symbolic_shape: tuple[IndexSymbol, ...],
-    vector_shapes: dict[IndexSymbol, int],
+    vector_shapes: dict[fx.Graph, dict[IndexSymbol, int]],
     target_dim: IndexSymbol,
 ) -> int:
     """
